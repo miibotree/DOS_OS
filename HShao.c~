@@ -1,0 +1,278 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <dos.h>
+
+#define FINISHED 0
+#define RUNNING 1
+#define READY 2
+#define BLOCKED 3
+
+#define NTCB 5
+
+#define GET_INDOS 0x34
+#define GET_CRIT_ERR 0x5d06
+
+
+char far *indos_ptr = 0;/*存放指针变量INDOS标志的地址*/
+char far *crit_err_ptr = 0;/*该指针变量存放严重错误的标志的地址*/
+
+void InitDos(){
+	union REGS regs;
+	struct SREGS segregs;
+
+	/*获取标志地址*/
+	regs.h.ah = GET_INDOS;
+	intdosx(&regs, &regs, &segregs);
+	/*取编译地址的运算*/	
+	indos_ptr = MK_FP(segregs.es, regs.x.bx);
+
+	/*获取严重错误标志的地址*/
+	if (_osmajor < 3)
+	{
+		crit_err_ptr = indos_ptr + 1;
+		/* code */
+	}else if (_osmajor == 3 && _osmajor == 0)
+		crit_err_ptr = indos_ptr - 1;
+	else{
+		regs.x.ax = GET_CRIT_ERR;
+		intdosx(&regs,&regs,&segregs);
+		crit_err_ptr = MK_FP(segregs.ds,regs.x.si);
+	}
+}
+
+int DosBusy(void){
+	if (indos_ptr && crit_err_ptr)
+	{
+		/* code */
+		return(*indos_ptr || *crit_err_ptr);
+	}else{
+		return(-1);/*InitDos() hasn't been called*/
+	}
+}
+
+int treed_id = 0;
+int timecount = 0;/*初始化*/
+int TL = 1;/*时间片大小*/
+int current = 0;
+struct TCB{
+	unsigned char *stack;
+	unsigned ss;
+	unsigned sp;
+	char state;
+	char name[10];
+} tcb[NTCB];
+
+struct int_regs{
+	unsigned bp,di,si,ds,es,dx,cx,bx,ax,ip,cs,flags,off,seg;
+};
+
+typedef int (far *codeptr)(void);
+void interrupt (*old_int8)();
+int create(char *name,codeptr code,int stck);
+void initTcb();
+void over(int id);
+void destroy(int id);
+void interrupt swtch();
+int find(void);/*寻找内部标识符*/
+
+void initTcb(){
+	int id;
+	for (id = 0; id < NTCB; id++)
+	{
+		/*线程堆栈起始地址*/
+		tcb[id].stack = NULL;
+		tcb[id].state = FINISHED;
+		tcb[id].name[0] = '\0';
+		/*tcb[id].*/
+	}
+}
+
+int create(char *name, codeptr code, int stck){
+	int id;
+	struct int_regs far *regs;
+	for (id = 1; id < NTCB; id++)
+	{
+		/* code */
+		if (tcb[id].state == FINISHED)
+		{
+			break;
+			/* code */
+		}
+	}
+	if (id == NTCB){
+	
+		printf("hehe");
+		return -1;
+		/* code */
+	}else{
+		tcb[id].stack = (unsigned char *)malloc(stck);
+		regs = (struct int_regs far *)(tcb[id].stack + stck);
+		regs--;/*回到sp*/
+
+		tcb[id].ss = FP_SEG(regs);/*地址断址*/
+		tcb[id].sp = FP_OFF(regs);
+		tcb[id].state = READY;
+		strcpy(tcb[id].name,name);
+		regs->ip = FP_OFF(code);
+		regs->cs = FP_SEG(code);
+		regs->flags = 0X200;
+		regs->off = FP_OFF(over);/*铺垫over函数*/
+		regs->seg = FP_SEG(over);
+		regs->ds = _DS;
+		regs->es = _DS;
+		return id;
+	}
+}
+void destroy(int id){
+	free(tcb[id].stack);
+	tcb[id].stack = NULL;
+	tcb[id].name[0] = '\0';
+	tcb[id].state = FINISHED;
+}
+
+void over(){
+	destroy(current);/*撤销线程*/
+	swtch();
+}
+
+void interrupt swtch(){/*待续*/
+	int i;
+	disable();/*关*/
+	tcb[current].ss = _SS;
+	tcb[current].sp = _SP;
+	if (tcb[current].state == RUNNING)
+	{
+		tcb[current].state = READY;
+		/* code */
+	}
+	i = find();
+	if (i < 0)
+	{
+		i = 0;
+		/* code */
+	}
+	_SS = tcb[i].ss;
+	_SP = tcb[i].sp;
+	tcb[i].state = RUNNING;
+	current = i;
+	timecount = 0;
+	enable();/*开*/
+}
+
+void f1(void){
+	int i,j,k;
+	for (i = 0; i < 40; i++)
+	{
+		/* code */
+		putchar('a');
+		/*延时*/
+		for (j = 0; j < 10000; j++)
+		{
+			for (k = 0; k < 10000; k++);
+		}
+	}
+}
+void f2(void){
+		long i,j,k;
+		for (i = 0; i < 30; i++)
+		{
+			putchar('b');
+			for (j = 0; j < 10000; j++)
+			{
+				for (k = 0; k < 10000; k++);
+			}
+		}
+}
+
+/*检查0线程外其他线程是否已经运行完毕*/
+int finished(){
+	int id;
+	for (id = 1; id < NTCB; id++)
+	{
+		if (tcb[id].state != FINISHED)
+		{
+			/* code */
+			return 0;
+		}
+		/* code */
+	}
+	return 1;
+}
+/*时间片到时引起的CPU调度*/
+void interrupt new_int8(){
+	(*old_int8)();/*调用原来的时钟中断服务*/
+	timecount++;
+	if (timecount < TL || DosBusy())
+	{
+		return;
+		/* code */
+	}
+	swtch();/*调用swtch重新调整*/
+}
+
+void tcb_state(){
+	int id;
+    printf("\n  **** The current threads' state ****\n");
+    for(id = 0; id < NTCB; id++)
+    {
+        printf("Thread%d %9s state is ", id, tcb[id].name);
+        switch(tcb[id].state)
+        {
+            case FINISHED: puts("FINISHED"); break;
+            case RUNNING: puts("RUNNING"); break;
+            case READY: puts("READY"); break;
+            case BLOCKED: puts("BLOCKED"); break;
+        }
+    }
+}
+/*寻找内部READY标识符*/
+int find(void){
+	int id;
+	for (id = current + 1; id < NTCB; id++)
+	{
+		if (tcb[id].state == READY)
+		{
+			return id;
+			/* code */
+		}
+		/* code */
+	}
+	for (id = 0; id < current; id++)
+	{
+		if (tcb[id].state == READY)
+		{
+			return id;
+			/* code */
+		}
+		/* code */
+	}
+	return -1;
+}
+
+int main(){
+	InitDos();/*不可重入性*/
+	initTcb();
+	old_int8 = getvect(8);/*获取系统原来的时钟中断服务程序的入口地址*/
+
+	strcpy(tcb[0].name,"main");
+	tcb[0].state = RUNNING;
+	current = 0;
+
+	create("f1", (codeptr)f1, 1024);
+	create("f2", (codeptr)f2, 1024);
+	tcb_state();/**/
+
+	/*启动多个线程的并发执行*/
+	setvect(8, new_int8);
+	swtch();
+	while(!finished());
+
+	/*终止多任务系统*/
+	tcb[0].name[0] = '\0';
+	tcb[0].state = FINISHED;
+	setvect(8, old_int8);
+
+	tcb_state();
+	printf("\nterminated \n");
+	return 0;
+}
