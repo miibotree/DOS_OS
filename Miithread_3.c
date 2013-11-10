@@ -1,5 +1,5 @@
 /***************************************
-Project:	Multi thread OS program
+Project:	Multi thread DOS_OS program
 Author:		Miibotree
 Time:		2013.11
 ***************************************/
